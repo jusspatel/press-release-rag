@@ -1,12 +1,14 @@
 import csv
+import os
 import re
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 # --- CONFIGURATION ---
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 YEAR_TO_DOWNLOAD = "2026"
-CSV_FILE = "pib_urls.csv"
+CSV_FILE = os.path.join(BASE_DIR, "data", "pib_urls.csv")
 BASE_URL = "https://www.pib.gov.in/allRel.aspx?reg=48&lang=1"
 
 MONTHS = [

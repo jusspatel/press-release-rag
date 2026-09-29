@@ -1,3 +1,7 @@
+data/pib_pdfs/
 pib_pdfs/
+data/qdrant_db/
 qdrant_db/
 *.csv
+__pycache__/
+.env

@@ -46,12 +46,13 @@ from qdrant_client import QdrantClient, models
 # ---------------------------------------------------------------------------
 # Configuration (bge-large-en-v1.5 aligned)
 # ---------------------------------------------------------------------------
-PDF_DIR = "pib_pdfs"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+PDF_DIR = os.path.join(BASE_DIR, "data", "pib_pdfs")
 PROGRESS_EVERY = 10  # print a progress line every N files scanned
-CSV_FILE = "pib_urls.csv"
-LOCAL_QDRANT_PATH = "./qdrant_db"
+CSV_FILE = os.path.join(BASE_DIR, "data", "pib_urls.csv")
+LOCAL_QDRANT_PATH = os.path.join(BASE_DIR, "data", "qdrant_db")
 COLLECTION_NAME = "pib_hybrid_releases"
-REPORT_FILE = "ingest_report.csv"
+REPORT_FILE = os.path.join(BASE_DIR, "data", "ingest_report.csv")
 
 BATCH_CHUNKS = 128  # flush size; smaller = more frequent progress and less lost work on Ctrl-C
 CHUNK_SIZE = 1000

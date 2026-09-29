@@ -1,8 +1,10 @@
+import os
 from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding, SparseTextEmbedding
 
 # Exact constants from ingestion_partial.py
-LOCAL_QDRANT_PATH = "./qdrant_db"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+LOCAL_QDRANT_PATH = os.path.join(BASE_DIR, "data", "qdrant_db")
 COLLECTION_NAME = "pib_hybrid_releases"
 DENSE_MODEL_NAME = "BAAI/bge-large-en-v1.5"
 SPARSE_MODEL_NAME = "Qdrant/bm25"
@@ -26,30 +28,38 @@ class HybridRetriever:
             values=sparse_raw.values.tolist(),
         )
 
+    def close(self):
+        """Safely close underlying local Qdrant client."""
+        if hasattr(self, "client") and self.client is not None:
+            self.client.close()
+
     def search(
         self,
         query: str,
         limit: int = 4,
         ministry_filter: str | None = None,
     ) -> list[dict]:
-        # 1. Embed query (dense + sparse)
-        dense_vec = list(self.dense_model.embed([query]))[0].tolist()
-        sparse_raw = list(self.sparse_model.embed([query]))[0]
+        # Prepend BGE query instruction for bge-large
+        dense_query_text = f"Represent this sentence for searching relevant passages: {query.strip()}"
+        dense_vec = list(self.dense_model.embed([dense_query_text]))[0].tolist()
+        sparse_raw = list(self.sparse_model.embed([query.strip()]))[0]
         sparse_vec = self._format_sparse(sparse_raw)
 
-        # 2. Optional ministry filtering
+        # Build filter only if ministry is present and meaningful
         filter_condition = None
         if ministry_filter:
-            filter_condition = models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="ministry",
-                        match=models.MatchText(text=ministry_filter),
-                    )
-                ]
-            )
+            # Match on broad keyword stem (e.g., 'Communications') rather than full string
+            core_keyword = ministry_filter.replace("Ministry of", "").replace("Department of", "").strip()
+            if core_keyword:
+                filter_condition = models.Filter(
+                    should=[
+                        models.FieldCondition(
+                            key="ministry",
+                            match=models.MatchText(text=core_keyword),
+                        )
+                    ]
+                )
 
-        # 3. Hybrid RRF Query on named vectors 'dense' and 'sparse'
         results = self.client.query_points(
             collection_name=self.collection,
             prefetch=[
@@ -71,28 +81,27 @@ class HybridRetriever:
             with_payload=True,
         )
 
-        # 4. Extract payloads matching ingestion_partial.py schema
+        # Fallback: if strict ministry filter yielded 0 hits, retry without filter
+        if not results.points and filter_condition is not None:
+            return self.search(query=query, limit=limit, ministry_filter=None)
+
         formatted_chunks = []
         for pt in results.points:
             p = pt.payload or {}
             formatted_chunks.append({
                 "id": str(pt.id),
-                "text": p.get("text", ""),
+                "text": p.get("text") or p.get("content") or "",
                 "title": p.get("title", ""),
                 "subtitle": p.get("subtitle", ""),
                 "ministry": p.get("ministry", ""),
                 "bureau": p.get("bureau", ""),
                 "prid": p.get("prid", ""),
-                "year": p.get("year"),
-                "month": p.get("month"),
                 "published_at": p.get("published_at", ""),
                 "url": p.get("url", ""),
-                "chunk_index": p.get("chunk_index", 0),
                 "score": pt.score,
             })
 
         return formatted_chunks
-
 
 if __name__ == "__main__":
     retriever = HybridRetriever()
