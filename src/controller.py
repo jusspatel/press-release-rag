@@ -17,13 +17,13 @@ try:
     from rag.retriever import HybridRetriever
     from rag.crag import CRAGEngine, CRAGStatus
     from rag.exa_tool import ExaSearchTool
-    from rag.self_rag import self_rag_app
+    from rag.self_rag import self_rag_app,register_retrieval_tools
 except ImportError:
     from src.rag.router import execute_routing, RouteEnum
     from src.rag.retriever import HybridRetriever
     from src.rag.crag import CRAGEngine, CRAGStatus
     from src.rag.exa_tool import ExaSearchTool
-    from src.rag.self_rag import self_rag_app
+    from src.rag.self_rag import self_rag_app,register_retrieval_tools
 
 # ---------------------------------------------------------------------------
 # 1. Hardware & Local Model Initialization
@@ -40,10 +40,12 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 model.eval()
 
-# Shared Components
 retriever = HybridRetriever()
 crag = CRAGEngine(tokenizer=tokenizer, model=model, device=DEVICE)
 exa = ExaSearchTool()
+
+# Register singletons to prevent lock contention
+register_retrieval_tools(retriever_instance=retriever, exa_instance=exa)
 
 # ---------------------------------------------------------------------------
 # 2. Main Orchestration Function
@@ -148,14 +150,18 @@ def orchestrate_query(user_query: str) -> dict:
 
     # -----------------------------------------------------------------------
     # Step 3: Self-RAG LangGraph Synthesis Loop (Gemini 3.5 Flash)
-    # -----------------------------------------------------------------------
+
     print(f"\n[3/3] Passing context to Gemini 3.5 Flash Self-RAG Graph (Source: {source_label})...")
+    
+    # State matches SelfRAGState in self_rag.py
     initial_graph_state = {
         "query": user_query,
         "context": context_str,
+        "seen_chunks": [context_str] if context_str else [],
+        "tried_queries": [search_kw],
         "draft": "",
         "critique": None,
-        "retry_count": 0,
+        "loops": 0,
         "final_output": "",
         "status": "",
     }
@@ -167,7 +173,7 @@ def orchestrate_query(user_query: str) -> dict:
         "route": decision.route.value,
         "source": source_label,
         "evaluation_status": graph_result.get("status"),
-        "retries_used": graph_result.get("retry_count"),
+        "retries_used": graph_result.get("loops", 0),  # mapped from new 'loops' key
         "response": graph_result.get("final_output"),
     }
 
