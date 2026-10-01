@@ -1,0 +1,26 @@
+# Core Framework & LLM Orchestration
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langchain-exa>=0.2.0
+langchain-text-splitters>=0.3.0
+langgraph>=0.2.0
+langsmith>=0.1.0
+
+# Vector Database & Embeddings
+qdrant-client>=1.11.0
+fastembed>=0.4.0
+
+# Local Models & Neural Network (Router & CRAG)
+torch>=2.2.0
+transformers>=4.40.0
+accelerate>=0.30.0
+
+# Data Extraction & Ingestion
+pymupdf>=1.24.0
+beautifulsoup4>=4.12.0
+playwright>=1.44.0
+
+# UI & Utilities
+streamlit>=1.35.0
+pydantic>=2.7.0
+python-dotenv>=1.0.0
