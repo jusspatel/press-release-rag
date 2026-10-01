@@ -10,46 +10,46 @@ This platform couples **Front-Door Query Routing**, **Hybrid Vector Retrieval** 
 
 ```mermaid
 flowchart TD
-    UserQuery([User Query]) --> Router["Local Qwen 2.5 1.5B Router<br/>(Query Triage & Ministry Extraction)"]
+    UserQuery(["User Query"]) --> Router["Local Qwen 2.5 1.5B Router<br>Query Triage and Ministry Extraction"]
 
-    Router -->|direct: Coding / Math / Logic| DirectGen["Local Qwen Generator<br/>(Immediate Direct Response)"]
-    Router -->|vector_db: Governance / Policy| HybridRet["Hybrid Qdrant Retriever<br/>• Dense: BAAI/bge-large-en-v1.5<br/>• Sparse: Qdrant BM25<br/>• Fusion: Reciprocal Rank Fusion (RRF)<br/>• Ministry Metadata Filter"]
+    Router -->|Direct: Coding, Math, Logic| DirectGen["Local Qwen Generator<br>Immediate Direct Response"]
+    Router -->|Vector DB: Governance, Policy| HybridRet["Hybrid Qdrant Retriever<br>BGE-Large Dense + BM25 Sparse + RRF"]
 
-    HybridRet --> LocalHits{Chunks Found?}
-    LocalHits -->|No Hits (0 Chunks)| ExaZeroFallback["Exa Neural Web Search<br/>(Government Biased Fallback)"]
-    LocalHits -->|Hits Found| CRAGEval["CRAG Document Evaluator<br/>(Local Qwen 2.5 1.5B)"]
+    HybridRet --> LocalHits{"Chunks Found?"}
+    LocalHits -->|Zero Hits| ExaZeroFallback["Exa Neural Web Search<br>Government Biased Fallback"]
+    LocalHits -->|Hits Found| CRAGEval["CRAG Document Evaluator<br>Local Qwen 2.5 1.5B"]
 
-    CRAGEval -->|CORRECT| StripFilter["Decompose into Atomic Strips<br/>(Filter & Keep Relevant Facts)"]
-    CRAGEval -->|AMBIGUOUS| StripFilterHybrid["Filter Local Strips +<br/>Exa Web Search for Missing Data"]
-    CRAGEval -->|INCORRECT| ExaDiscardFallback["Discard Irrelevant Chunks +<br/>Exa Fallback Web Search"]
+    CRAGEval -->|CORRECT| StripFilter["Decompose into Atomic Strips<br>Filter and Keep Relevant Facts"]
+    CRAGEval -->|AMBIGUOUS| StripFilterHybrid["Filter Local Strips +<br>Exa Web Search for Missing Data"]
+    CRAGEval -->|INCORRECT| ExaDiscardFallback["Discard Irrelevant Chunks +<br>Exa Fallback Web Search"]
 
     ExaZeroFallback --> GeneratorNode
     StripFilter --> GeneratorNode
     StripFilterHybrid --> GeneratorNode
     ExaDiscardFallback --> GeneratorNode
 
-    subgraph SelfRAG ["Self-RAG LangGraph Cyclic Loop (Gemini 3.5 Flash)"]
-        GeneratorNode["Generator Node<br/>Drafts response strictly from context"]
-        CritiqueNode["Critique Node<br/>Structured Pydantic Evaluation<br/>(is_grounded, is_relevant, is_complete)"]
-        RetryGate{Critique Gate}
-        RetrieveNode["Re-Retrieve Node<br/>(Query Qdrant -> Exa Web Escalation)"]
-        CiteRespond["Cite & Respond Node<br/>(Supported & Relevant)"]
-        NotFound["Not Found Node<br/>(Retrieval Gap Note)"]
-        BestEffort["Best Effort Node<br/>(Exhausted Retries Disclaimer)"]
+    subgraph SelfRAG ["Self-RAG LangGraph Cyclic Loop - Gemini 3.5 Flash"]
+        GeneratorNode["Generator Node<br>Drafts response strictly from context"]
+        CritiqueNode["Critique Node<br>Structured Pydantic Evaluation"]
+        RetryGate{"Critique Gate"}
+        RetrieveNode["Re-Retrieve Node<br>Query Qdrant or Exa Web Escalation"]
+        CiteRespond["Cite and Respond Node<br>Supported and Relevant"]
+        NotFound["Not Found Node<br>Retrieval Gap Note"]
+        BestEffort["Best Effort Node<br>Exhausted Retries Disclaimer"]
 
         GeneratorNode --> CritiqueNode
         CritiqueNode --> RetryGate
 
-        RetryGate -->|Passed: Complete & Grounded| CiteRespond
-        RetryGate -->|Extraction Miss / Hallucination<br/>(loops < 3)| GeneratorNode
-        RetryGate -->|Retrieval Gap<br/>(loops < 3)| RetrieveNode
+        RetryGate -->|Passed: Grounded and Relevant| CiteRespond
+        RetryGate -->|Extraction Miss or Hallucination| GeneratorNode
+        RetryGate -->|Retrieval Gap: Loops under 3| RetrieveNode
         RetrieveNode --> GeneratorNode
 
-        RetryGate -->|Max Loops Exceeded & Retrieval Gap| NotFound
-        RetryGate -->|Max Loops Exceeded & Other Failure| BestEffort
+        RetryGate -->|Max Loops Exceeded: Retrieval Gap| NotFound
+        RetryGate -->|Max Loops Exceeded: Other Failure| BestEffort
     end
 
-    DirectGen --> UI([Streamlit Dashboard & LangSmith Tracing])
+    DirectGen --> UI(["Streamlit Dashboard and LangSmith Tracing"])
     CiteRespond --> UI
     NotFound --> UI
     BestEffort --> UI
