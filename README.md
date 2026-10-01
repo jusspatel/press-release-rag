@@ -10,49 +10,24 @@ This platform couples **Front-Door Query Routing**, **Hybrid Vector Retrieval** 
 
 ```mermaid
 flowchart TD
-    UserQuery(["User Query"]) --> Router["Local Qwen 2.5 1.5B Router<br>Query Triage and Ministry Extraction"]
+    Query(["User Query"]) --> Router{"Router (Qwen 2.5 1.5B)"}
 
-    Router -->|Direct: Coding, Math, Logic| DirectGen["Local Qwen Generator<br>Immediate Direct Response"]
-    Router -->|Vector DB: Governance, Policy| HybridRet["Hybrid Qdrant Retriever<br>BGE-Large Dense + BM25 Sparse + RRF"]
+    Router -->|Direct Task| Direct["Direct Response (Parametric)"]
+    Router -->|Governance RAG| Retriever["Hybrid Qdrant (Dense + BM25)"]
 
-    HybridRet --> LocalHits{"Chunks Found?"}
-    LocalHits -->|Zero Hits| ExaZeroFallback["Exa Neural Web Search<br>Government Biased Fallback"]
-    LocalHits -->|Hits Found| CRAGEval["CRAG Document Evaluator<br>Local Qwen 2.5 1.5B"]
+    Retriever --> CRAG{"CRAG Evaluator"}
+    CRAG -->|Verified Facts| Draft
+    CRAG -->|Missing or Ambiguous| Exa["Exa Web Search Fallback"]
+    Exa --> Draft
 
-    CRAGEval -->|CORRECT| StripFilter["Decompose into Atomic Strips<br>Filter and Keep Relevant Facts"]
-    CRAGEval -->|AMBIGUOUS| StripFilterHybrid["Filter Local Strips +<br>Exa Web Search for Missing Data"]
-    CRAGEval -->|INCORRECT| ExaDiscardFallback["Discard Irrelevant Chunks +<br>Exa Fallback Web Search"]
-
-    ExaZeroFallback --> GeneratorNode
-    StripFilter --> GeneratorNode
-    StripFilterHybrid --> GeneratorNode
-    ExaDiscardFallback --> GeneratorNode
-
-    subgraph SelfRAG ["Self-RAG LangGraph Cyclic Loop - Gemini 3.5 Flash"]
-        GeneratorNode["Generator Node<br>Drafts response strictly from context"]
-        CritiqueNode["Critique Node<br>Structured Pydantic Evaluation"]
-        RetryGate{"Critique Gate"}
-        RetrieveNode["Re-Retrieve Node<br>Query Qdrant or Exa Web Escalation"]
-        CiteRespond["Cite and Respond Node<br>Supported and Relevant"]
-        NotFound["Not Found Node<br>Retrieval Gap Note"]
-        BestEffort["Best Effort Node<br>Exhausted Retries Disclaimer"]
-
-        GeneratorNode --> CritiqueNode
-        CritiqueNode --> RetryGate
-
-        RetryGate -->|Passed: Grounded and Relevant| CiteRespond
-        RetryGate -->|Extraction Miss or Hallucination| GeneratorNode
-        RetryGate -->|Retrieval Gap: Loops under 3| RetrieveNode
-        RetrieveNode --> GeneratorNode
-
-        RetryGate -->|Max Loops Exceeded: Retrieval Gap| NotFound
-        RetryGate -->|Max Loops Exceeded: Other Failure| BestEffort
+    subgraph SelfRAG ["Self-RAG Loop (Gemini 3.5 Flash)"]
+        Draft["Draft Answer"] --> Critique{"Critique Node"}
+        Critique -->|Grounded & Complete| Final["Verified Response"]
+        Critique -->|Gap or Hallucination| Draft
     end
 
-    DirectGen --> UI(["Streamlit Dashboard and LangSmith Tracing"])
-    CiteRespond --> UI
-    NotFound --> UI
-    BestEffort --> UI
+    Direct --> UI(["Streamlit UI & LangSmith"])
+    Final --> UI
 ```
 
 ---
