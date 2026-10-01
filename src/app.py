@@ -1,6 +1,15 @@
-import streamlit as st
+import os
 import time
+from langsmith import Client
+import streamlit as st
 from controller import orchestrate_query, RouteEnum
+langsmith_client = None
+if os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGSMITH_API_KEY"):
+    try:
+        langsmith_client = Client()
+    except Exception as e:
+        langsmith_client = None
+
 st.set_page_config(
     page_title="PIB Governance Intelligence",
     layout="wide",
@@ -33,9 +42,97 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------------------------
-# Sidebar: System Status & Diagnostic Metrics
-# ---------------------------------------------------------------------------
+
+def render_langsmith_thinking_trace(run_id_str: str):
+    """Fetches run steps from LangSmith and renders each node's thinking process."""
+    if not langsmith_client or not run_id_str:
+        return
+
+    st.markdown("### Pipeline Execution & Thinking Trace")
+    
+    with st.spinner("Fetching execution trace from LangSmith..."):
+        try:
+            # Brief delay to allow background telemetry ingestion
+            time.sleep(1.2)
+            
+            project_name = os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "default"
+            
+            # Direct link to LangSmith Studio
+            st.markdown(
+                f"[🔗 Open Full Trace in LangSmith Studio](https://smith.langchain.com/projects/p/{project_name}/r/{run_id_str})"
+            )
+
+            # Query child runs without conflicting root/execution_order filters
+            runs = list(
+                langsmith_client.list_runs(
+                    project_name=project_name,
+                    filter=f'eq(trace_id, "{run_id_str}")'
+                )
+            )
+
+            # If trace_id filter returns empty, fall back to querying by parent_run_id
+            if not runs:
+                runs = list(
+                    langsmith_client.list_runs(
+                        project_name=project_name,
+                        parent_run_id=run_id_str
+                    )
+                )
+
+            # Filter out the root orchestrator itself so only steps/nodes appear
+            child_runs = [r for r in runs if str(r.id) != run_id_str]
+            # Order steps chronologically
+            child_runs.sort(key=lambda x: x.start_time if x.start_time else 0)
+
+            if not child_runs:
+                st.info("Trace recorded in LangSmith. Click the studio link above to inspect the execution tree.")
+                return
+
+            # Render individual thinking steps
+            for i, r in enumerate(child_runs):
+                step_name = r.name
+                duration = f"({(r.end_time - r.start_time).total_seconds():.2f}s)" if (r.end_time and r.start_time) else ""
+                
+                with st.expander(f"Step {i+1}: **{step_name}** {duration}", expanded=(step_name in ["critique", "retrieve"])):
+                    # Critique Node Inspection
+                    if "critique" in step_name.lower():
+                        outputs = r.outputs or {}
+                        critique_data = outputs.get("critique", {})
+                        if critique_data:
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                st.markdown(f"**Grounded:** `{critique_data.get('is_grounded')}`")
+                            with c2:
+                                st.markdown(f"**Relevant:** `{critique_data.get('is_relevant')}`")
+                            with c3:
+                                st.markdown(f"**Failure Type:** `{critique_data.get('failure_type')}`")
+                            
+                            st.markdown(f"**Feedback:** {critique_data.get('feedback')}")
+                            
+                            queries = critique_data.get("search_queries") or []
+                            if queries:
+                                st.markdown("**Generated Search Queries:**")
+                                for q in queries:
+                                    st.code(q, language="text")
+
+                    # Retrieve Node Inspection
+                    elif "retrieve" in step_name.lower():
+                        outputs = r.outputs or {}
+                        tried = outputs.get("tried_queries", [])
+                        st.markdown(f"**Queries Tried:** `{tried}`")
+
+                    # Generator Node Inspection
+                    elif "generator" in step_name.lower():
+                        outputs = r.outputs or {}
+                        st.markdown("**Generated Candidate Draft:**")
+                        st.caption(outputs.get("draft", ""))
+
+                    # Raw Inputs/Outputs Inspect Popover
+                    with st.popover("View Raw I/O"):
+                        st.json({"inputs": r.inputs, "outputs": r.outputs})
+
+        except Exception as e:
+            st.caption(f"Could not load detailed LangSmith trace: {e}")
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/5/55/Emblem_of_India.svg", width=65)
     st.markdown("### **System Architecture**")
@@ -47,7 +144,7 @@ with st.sidebar:
     """)
     st.divider()
 
-    st.markdown("### **Preset Governance Queries**")
+    st.markdown("### **Preset Sample Queries**")
     sample_queries = [
         "What is the strategic agenda and MoU between India and European Union regarding 6G technology?",
         "When was the original Digital India program first launched in 2015?",
@@ -56,12 +153,12 @@ with st.sidebar:
     ]
     
     selected_sample = st.selectbox("Load sample query:", ["Select..."] + sample_queries)
-    st.caption("2026 Press Information Bureau (PIB) Official Intelligence System")
+
 
 # ---------------------------------------------------------------------------
 # Main Query Interface
 # ---------------------------------------------------------------------------
-st.markdown('<div class="main-title">🏛️ Indian Governance Intelligence System</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Press Releases 2026 Intelligence</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Hybrid Corrective RAG (CRAG) & Self-RAG Pipeline across PIB 2026 Records</div>', unsafe_allow_html=True)
 
 # Initialize Session State
@@ -113,7 +210,6 @@ if submit_clicked and user_query.strip():
                 source_formatted = result.get("source", "N/A").replace("_", " ").title()
                 st.metric("Context Origin", source_formatted)
             with m_col3:
-                # Formats 'retrieval_gap', 'supported_and_relevant', etc.
                 raw_stat = result.get("evaluation_status", "N/A")
                 graph_stat = raw_stat.replace("_", " ").title()
                 st.metric("Critique Verification", graph_stat)
@@ -126,7 +222,12 @@ if submit_clicked and user_query.strip():
             st.markdown("### **Intelligence Synthesis**")
             st.markdown(result.get("response", "No response returned."))
 
-            # Expandable Raw Trace
+            # LangSmith Execution Trace Render
+            if result.get("run_id"):
+                st.divider()
+                render_langsmith_thinking_trace(result.get("run_id"))
+
+            # Expandable Raw Payload Trace
             with st.expander("View Raw Pipeline Trace Payload"):
                 st.json(result)
 

@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+import uuid
 
 # Add project root and src directory to sys.path so modules resolve whether executed directly or as a package
 BASE_DIR = Path(__file__).resolve().parent
@@ -155,16 +156,21 @@ def orchestrate_query(user_query: str) -> dict:
     
     # State matches SelfRAGState in self_rag.py
     initial_graph_state = {
-        "query": user_query,
-        "context": context_str,
-        "seen_chunks": [context_str] if context_str else [],
-        "tried_queries": [search_kw],
-        "draft": "",
-        "critique": None,
-        "loops": 0,
-        "final_output": "",
-        "status": "",
-    }
+    "query": user_query,
+    "context": context_str,
+    "seen_chunks": [c.get("text", "") for c in chunks] if chunks else ([context_str] if context_str else []),
+    "tried_queries": [search_kw],
+    "draft": "",
+    "critique": None,
+    "loops": 0,
+    "final_output": "",
+    "status": "",
+}
+    run_id = uuid.uuid4()
+
+# Pass run_id inside config to LangGraph
+    config = {"run_id": run_id}
+    graph_result = self_rag_app.invoke(initial_graph_state, config=config)
 
     graph_result = self_rag_app.invoke(initial_graph_state)
 
@@ -175,6 +181,7 @@ def orchestrate_query(user_query: str) -> dict:
         "evaluation_status": graph_result.get("status"),
         "retries_used": graph_result.get("loops", 0),  # mapped from new 'loops' key
         "response": graph_result.get("final_output"),
+        "run_id": str(run_id)
     }
 
 

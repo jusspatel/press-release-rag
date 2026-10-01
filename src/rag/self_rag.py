@@ -10,17 +10,17 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
 
-MAX_LOOPS = 3  # total critique-failures allowed (generation OR retrieval)
+MAX_LOOPS = 3
 
-
-# --- At top of self_rag.py ---
+# ---------------------------------------------------------------------------
+# 0. Decoupled Tool Singletons
+# ---------------------------------------------------------------------------
 try:
     from rag.retriever import HybridRetriever
     from rag.exa_tool import ExaSearchTool
 except ImportError:
     from src.rag.retriever import HybridRetriever
     from src.rag.exa_tool import ExaSearchTool
-
 
 _SHARED_RETRIEVER = None
 _SHARED_EXA = None
@@ -33,11 +33,10 @@ def register_retrieval_tools(retriever_instance=None, exa_instance=None):
     if exa_instance is not None:
         _SHARED_EXA = exa_instance
 
-def retrieve(query: str, k: int = 4) -> list[str]:
-    """Dynamically re-retrieves missing information via the shared Qdrant instance, falling back to Exa."""
+
+def retrieve_local(query: str, k: int = 4) -> list[str]:
+    """Queries local Qdrant index."""
     chunks = []
-    
-    # 1. Search local Qdrant using the shared active connection
     if _SHARED_RETRIEVER is not None:
         try:
             results = _SHARED_RETRIEVER.search(query=query, limit=k)
@@ -47,21 +46,25 @@ def retrieve(query: str, k: int = 4) -> list[str]:
                     chunks.append(f"[{r.get('title', 'PIB Record')}]\n{text}")
         except Exception as e:
             print(f"[!] Qdrant re-retrieval error: {e}")
+    return chunks
 
-    # 2. If Qdrant returns no chunks, fall back to Exa
-    if not chunks and _SHARED_EXA is not None:
+
+def retrieve_web(query: str, num_results: int = 2) -> list[str]:
+    """Queries Exa web search."""
+    chunks = []
+    if _SHARED_EXA is not None:
         try:
             print(f"[*] Self-RAG loop fetching live web supplement via Exa: '{query}'...")
-            web_hits = _SHARED_EXA.search(query=query, num_results=2)
+            web_hits = _SHARED_EXA.search(query=query, num_results=num_results)
             for h in web_hits:
                 chunks.append(f"[Web: {h['title']} ({h['url']})]\n{h['text']}")
         except Exception as e:
             print(f"[!] Exa re-retrieval error: {e}")
-
     return chunks
 
+
 # ---------------------------------------------------------------------------
-# 1. Critique schema: now DIAGNOSES why the draft failed
+# 1. Critique Schema
 # ---------------------------------------------------------------------------
 class CritiqueGrade(BaseModel):
     is_grounded: bool = Field(
@@ -77,17 +80,17 @@ class CritiqueGrade(BaseModel):
         description=(
             "none: draft is fine. "
             "extraction_miss: the requested data IS present in the context but the draft missed it. "
-            "retrieval_gap: the requested data is NOT present anywhere in the context (draft may honestly say so). "
+            "retrieval_gap: the requested data is NOT present anywhere in the context. "
             "hallucination: draft contains claims not supported by the context."
         )
     )
     missing_info: str = Field(
         default="",
-        description="Precisely what information is still missing (e.g. 'per-crop MSP figures in Rs/quintal for KMS 2025-26').",
+        description="Precisely what information is still missing.",
     )
     search_queries: list[str] = Field(
         default_factory=list,
-        description="If failure_type is retrieval_gap: 1-3 NEW, specific search queries likely to surface the missing data. Must differ from earlier queries.",
+        description="If failure_type is retrieval_gap: 1-3 targeted queries to find the missing data.",
     )
     unsupported_claims: list[str] = Field(default_factory=list)
     feedback: str = Field(description="Concrete instruction for the next attempt.")
@@ -171,16 +174,16 @@ def critique_node(state: SelfRAGState) -> dict:
         "STEPS:\n"
         "1. Scan the CONTEXT itself for the specific data the user asked for.\n"
         "2. If it is in the context but the draft missed it -> failure_type=extraction_miss.\n"
-        "3. If it is NOT in the context (regardless of what the draft says) -> failure_type=retrieval_gap, "
-        "and propose 1-3 new, specific search_queries (e.g. use exact crop names, 'Rs per quintal', "
-        "'Kharif Marketing Season 2025-26', table/annexure wording). Do not repeat tried queries.\n"
+        "3. If it is NOT in the context -> failure_type=retrieval_gap, "
+        "and propose 1-3 new, specific search_queries (e.g., 'Kharif crops MSP table Rs per quintal', "
+        "or specific crop names). Do not repeat tried queries.\n"
         "4. If the draft asserts things the context does not support -> failure_type=hallucination.\n"
         "5. Otherwise failure_type=none.\n"
         "An honest 'the figures are not in the context' is grounded, but still incomplete."
     )
     grade = critique_llm.invoke(prompt)
-
     passed = grade.is_grounded and grade.is_relevant and grade.is_complete
+
     return {
         "critique": grade,
         "loops": state.get("loops", 0) + (0 if passed else 1),
@@ -188,22 +191,35 @@ def critique_node(state: SelfRAGState) -> dict:
 
 
 def retrieve_node(state: SelfRAGState) -> dict:
-    """Re-retrieve using the critique's rewritten queries and MERGE into context."""
+    """Queries local Qdrant first. If no NEW chunks are found, immediately escalates to Exa."""
     critique = state["critique"]
     seen = list(state.get("seen_chunks", []))
     tried = list(state.get("tried_queries", []))
     new_chunks = []
 
-    for q in critique.search_queries[:3]:
-        if q in tried:
-            continue
+    queries_to_run = [q for q in critique.search_queries[:3] if q not in tried]
+
+    for q in queries_to_run:
         tried.append(q)
-        for chunk in retrieve(q):
-            if chunk not in seen:
+        # 1. Try local Qdrant
+        local_candidates = retrieve_local(q, k=4)
+        fresh_local = [c for c in local_candidates if c not in seen and c not in state.get("context", "")]
+
+        if fresh_local:
+            for chunk in fresh_local:
+                seen.append(chunk)
+                new_chunks.append(chunk)
+        else:
+            # 2. Qdrant returned stale/duplicate data -> Escalate to Exa Web Search
+            web_candidates = retrieve_web(q, num_results=2)
+            fresh_web = [c for c in web_candidates if c not in seen and c not in state.get("context", "")]
+            for chunk in fresh_web:
                 seen.append(chunk)
                 new_chunks.append(chunk)
 
-    context = state["context"]
+    print(f"[*] retrieve_node: {len(queries_to_run)} queries executed -> {len(new_chunks)} NEW chunks added.")
+
+    context = state.get("context", "")
     if new_chunks:
         context += "\n\n[ADDITIONAL RETRIEVED CONTEXT]\n" + "\n---\n".join(new_chunks)
 
@@ -215,11 +231,10 @@ def cite_and_respond_node(state: SelfRAGState) -> dict:
 
 
 def not_found_node(state: SelfRAGState) -> dict:
-    """Retrieval kept failing: return an honest 'not found', not a padded answer."""
     missing = state["critique"].missing_info or "the specific figures requested"
     note = (
-        f"\n\n> *Could not verify: {missing}. Searched with "
-        f"{len(state.get('tried_queries', []))} additional queries without finding it in the knowledge base.*"
+        f"\n\n> *Could not verify: {missing}. Searched across available sources with "
+        f"{len(state.get('tried_queries', []))} additional queries without finding it.*"
     )
     return {"final_output": state["draft"] + note, "status": "retrieval_gap"}
 
@@ -230,7 +245,7 @@ def best_effort_output_node(state: SelfRAGState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 5. Router: route by failure TYPE, not just a counter
+# 5. Routing
 # ---------------------------------------------------------------------------
 def retry_gate(state: SelfRAGState) -> str:
     c = state["critique"]
@@ -243,11 +258,11 @@ def retry_gate(state: SelfRAGState) -> str:
     if c.failure_type == "retrieval_gap" and c.search_queries:
         return "re_retrieve"
 
-    return "regenerate"  # extraction_miss / hallucination
+    return "regenerate"
 
 
 # ---------------------------------------------------------------------------
-# 6. Graph
+# 6. Graph Compilation
 # ---------------------------------------------------------------------------
 builder = StateGraph(SelfRAGState)
 builder.add_node("generator", generator_node)
