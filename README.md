@@ -12,34 +12,46 @@ This platform couples **Front-Door Query Routing**, **Hybrid Vector Retrieval** 
 flowchart TD
     UserQuery([User Query]) --> Router["Local Qwen 2.5 1.5B Router<br/>(Query Triage & Ministry Extraction)"]
 
-    Router -->|direct: Coding / Math / Logic| DirectGen["Local Qwen Generator<br/>(Immediate Zero-Retrieval Response)"]
+    Router -->|direct: Coding / Math / Logic| DirectGen["Local Qwen Generator<br/>(Immediate Direct Response)"]
     Router -->|vector_db: Governance / Policy| HybridRet["Hybrid Qdrant Retriever<br/>• Dense: BAAI/bge-large-en-v1.5<br/>• Sparse: Qdrant BM25<br/>• Fusion: Reciprocal Rank Fusion (RRF)<br/>• Ministry Metadata Filter"]
 
     HybridRet --> LocalHits{Chunks Found?}
-    LocalHits -->|0 Chunks| ExaZeroFallback["Exa Neural Web Fallback<br/>(Biased to .gov.in / .nic.in)"]
-    LocalHits -->|Found Chunks| CRAGEval["CRAG Document Evaluator<br/>(Local Qwen 2.5 1.5B)"]
+    LocalHits -->|No Hits (0 Chunks)| ExaZeroFallback["Exa Neural Web Search<br/>(Government Biased Fallback)"]
+    LocalHits -->|Hits Found| CRAGEval["CRAG Document Evaluator<br/>(Local Qwen 2.5 1.5B)"]
 
-    CRAGEval -->|CORRECT| StripFilter["Decompose into Atomic Strips<br/>Filter & Recompose Local Facts"]
-    CRAGEval -->|AMBIGUOUS| StripFilterHybrid["Keep Local Strips +<br/>Exa Web Search for Missing Facts"]
+    CRAGEval -->|CORRECT| StripFilter["Decompose into Atomic Strips<br/>(Filter & Keep Relevant Facts)"]
+    CRAGEval -->|AMBIGUOUS| StripFilterHybrid["Filter Local Strips +<br/>Exa Web Search for Missing Data"]
     CRAGEval -->|INCORRECT| ExaDiscardFallback["Discard Irrelevant Chunks +<br/>Exa Fallback Web Search"]
 
-    ExaZeroFallback --> SelfRAG
-    StripFilter --> SelfRAG
-    StripFilterHybrid --> SelfRAG
-    ExaDiscardFallback --> SelfRAG
+    ExaZeroFallback --> GeneratorNode
+    StripFilter --> GeneratorNode
+    StripFilterHybrid --> GeneratorNode
+    ExaDiscardFallback --> GeneratorNode
 
     subgraph SelfRAG ["Self-RAG LangGraph Cyclic Loop (Gemini 3.5 Flash)"]
-        GeneratorNode["Generator Node<br/>Drafts grounded response"] --> CritiqueNode["Critique Node<br/>Structured JSON Evaluation<br/>(is_grounded, is_relevant, is_complete)"]
-        CritiqueNode --> RetryGate{Critique Gate}
-        RetryGate -->|Passed: Complete & Grounded| FinalOutput["Cite & Respond Node"]
-        RetryGate -->|Extraction Miss / Hallucination| GeneratorNode
-        RetryGate -->|Retrieval Gap<br/>(loops < 3)| RetrieveNode["Re-Retrieve Node<br/>(Local Qdrant -> Exa Fallback)"]
+        GeneratorNode["Generator Node<br/>Drafts response strictly from context"]
+        CritiqueNode["Critique Node<br/>Structured Pydantic Evaluation<br/>(is_grounded, is_relevant, is_complete)"]
+        RetryGate{Critique Gate}
+        RetrieveNode["Re-Retrieve Node<br/>(Query Qdrant -> Exa Web Escalation)"]
+        CiteRespond["Cite & Respond Node<br/>(Supported & Relevant)"]
+        NotFound["Not Found Node<br/>(Retrieval Gap Note)"]
+        BestEffort["Best Effort Node<br/>(Exhausted Retries Disclaimer)"]
+
+        GeneratorNode --> CritiqueNode
+        CritiqueNode --> RetryGate
+
+        RetryGate -->|Passed: Complete & Grounded| CiteRespond
+        RetryGate -->|Extraction Miss / Hallucination<br/>(loops < 3)| GeneratorNode
+        RetryGate -->|Retrieval Gap<br/>(loops < 3)| RetrieveNode
         RetrieveNode --> GeneratorNode
-        RetryGate -->|Max Loops Exceeded| BestEffort["Not Found / Best Effort Node"]
+
+        RetryGate -->|Max Loops Exceeded & Retrieval Gap| NotFound
+        RetryGate -->|Max Loops Exceeded & Other Failure| BestEffort
     end
 
     DirectGen --> UI([Streamlit Dashboard & LangSmith Tracing])
-    FinalOutput --> UI
+    CiteRespond --> UI
+    NotFound --> UI
     BestEffort --> UI
 ```
 
