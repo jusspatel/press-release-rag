@@ -12,6 +12,7 @@ from langgraph.graph import StateGraph, START, END
 
 MAX_LOOPS = 3
 
+
 # ---------------------------------------------------------------------------
 # 0. Decoupled Tool Singletons
 # ---------------------------------------------------------------------------
@@ -24,14 +25,17 @@ except ImportError:
 
 _SHARED_RETRIEVER = None
 _SHARED_EXA = None
+_SHARED_COMPACTOR = None
 
-def register_retrieval_tools(retriever_instance=None, exa_instance=None):
+def register_retrieval_tools(retriever_instance=None, exa_instance=None, compactor_func=None):
     """Allows controller.py to pass in already-initialized tool instances, preventing SQLite/RocksDB lock collisions."""
-    global _SHARED_RETRIEVER, _SHARED_EXA
+    global _SHARED_RETRIEVER, _SHARED_EXA, _SHARED_COMPACTOR
     if retriever_instance is not None:
         _SHARED_RETRIEVER = retriever_instance
     if exa_instance is not None:
         _SHARED_EXA = exa_instance
+    if compactor_func is not None:
+        _SHARED_COMPACTOR = compactor_func
 
 
 def retrieve_local(query: str, k: int = 4) -> list[str]:
@@ -221,7 +225,16 @@ def retrieve_node(state: SelfRAGState) -> dict:
 
     context = state.get("context", "")
     if new_chunks:
-        context += "\n\n[ADDITIONAL RETRIEVED CONTEXT]\n" + "\n---\n".join(new_chunks)
+        if _SHARED_COMPACTOR is not None:
+            print("[*] retrieve_node: Compacting prior context + newly retrieved chunks...")
+            focus_target = (
+                f"{state['query']}. Specifically find: {critique.missing_info}"
+                if critique and critique.missing_info
+                else state["query"]
+            )
+            context = _SHARED_COMPACTOR(focus_target, [context] + new_chunks)
+        else:
+            context += "\n\n[ADDITIONAL RETRIEVED CONTEXT]\n" + "\n---\n".join(new_chunks)
 
     return {"context": context, "seen_chunks": seen, "tried_queries": tried}
 

@@ -46,7 +46,11 @@ crag = CRAGEngine(tokenizer=tokenizer, model=model, device=DEVICE)
 exa = ExaSearchTool()
 
 # Register singletons to prevent lock contention
-register_retrieval_tools(retriever_instance=retriever, exa_instance=exa)
+register_retrieval_tools(
+    retriever_instance=retriever,
+    exa_instance=exa,
+    compactor_func=crag.compact_context,
+)
 
 # ---------------------------------------------------------------------------
 # 2. Main Orchestration Function
@@ -89,6 +93,8 @@ def orchestrate_query(user_query: str) -> dict:
             "query": user_query,
             "route": "direct",
             "source": "local_parametric",
+            "crag_status": "direct_bypass",
+            "relevant_documents": [],
             "evaluation_status": "direct_bypass",
             "retries_used": 0,
             "response": response_text.strip(),
@@ -107,47 +113,54 @@ def orchestrate_query(user_query: str) -> dict:
 
     context_str = ""
     source_label = ""
+    crag_status = "unassigned"
+    relevant_docs = []
 
     # Case B.1: Zero Chunks returned by local vector DB -> Trigger Exa
     if not chunks:
         print("[!] Local vector DB returned 0 results. Triggering corrective Exa Web Search...")
         web_hits = exa.search(search_kw, num_results=3)
-        context_str = "\n\n".join(
-            f"[Source: {h['title']} ({h['url']})]\n{h['text']}" for h in web_hits
-        )
-        source_label = "exa_fallback_zero_db_hits"
+        web_raw = [f"Source: {h['title']} ({h['url']})\n{h['text']}" for h in web_hits]
+        print("      -> Compacting Exa web fallback results with local small LLM...")
+        context_str = crag.compact_context(user_query, web_raw)
+        source_label = "exa_fallback_zero_db_hits_compacted"
+        crag_status = "zero_db_hits"
+        relevant_docs = []
 
     # Case B.2: Evaluate Chunks with CRAG
     else:
         print(f"      -> Evaluating {len(chunks)} Chunks with CRAG Engine...")
         doc_eval = crag.evaluate_documents(user_query, chunks)
+        crag_status = doc_eval.status.value
         print(f"      -> CRAG Grade : {doc_eval.status.value.upper()}")
         print(f"      -> Rationale  : {doc_eval.reasoning}")
 
         if doc_eval.status == CRAGStatus.CORRECT:
-            print("      -> Document confirmed relevant. Decomposing & filtering knowledge strips...")
+            print("      -> Document confirmed relevant. Compacting factual knowledge context...")
             context_str = crag.filter_and_recompose(user_query, chunks)
-            source_label = "qdrant_pib_verified_strips"
+            source_label = "qdrant_pib_verified_compacted"
+            # Only retain source documents when CRAG explicitly confirms them as correct
+            relevant_docs = chunks
 
         elif doc_eval.status == CRAGStatus.AMBIGUOUS:
             fallback_kw = doc_eval.fallback_search_query or search_kw
             print(f"      -> Partial facts detected. Supplementing via Exa: '{fallback_kw}'...")
-            local_strips = crag.filter_and_recompose(user_query, chunks)
+            local_texts = [f"PIB: {c.get('title', '')}\n{c.get('text', '')}" for c in chunks]
             web_hits = exa.search(fallback_kw, num_results=2)
-            web_text = "\n\n".join(
-                f"[Web Source: {h['title']} ({h['url']})]\n{h['text']}" for h in web_hits
-            )
-            context_str = f"--- Official PIB Context ---\n{local_strips}\n\n--- External Web Context ---\n{web_text}"
-            source_label = "hybrid_pib_plus_exa"
+            web_texts = [f"Web: {h['title']} ({h['url']})\n{h['text']}" for h in web_hits]
+            print("      -> Compacting combined PIB and Exa sources with local small LLM...")
+            context_str = crag.compact_context(user_query, local_texts + web_texts)
+            source_label = "hybrid_pib_plus_exa_compacted"
+            relevant_docs = []
 
         else:  # CRAGStatus.INCORRECT
             fallback_kw = doc_eval.fallback_search_query or search_kw
-            print(f"      -> Local chunks deemed incorrect. Discarding & triggering Exa: '{fallback_kw}'...")
+            print(f"      -> Local chunks deemed incorrect. Discarding & compacting Exa: '{fallback_kw}'...")
             web_hits = exa.search(fallback_kw, num_results=3)
-            context_str = "\n\n".join(
-                f"[Source: {h['title']} ({h['url']})]\n{h['text']}" for h in web_hits
-            )
-            source_label = "exa_fallback_irrelevant_chunks"
+            web_texts = [f"Web: {h['title']} ({h['url']})\n{h['text']}" for h in web_hits]
+            context_str = crag.compact_context(user_query, web_texts)
+            source_label = "exa_fallback_irrelevant_chunks_compacted"
+            relevant_docs = []
 
     # -----------------------------------------------------------------------
     # Step 3: Self-RAG LangGraph Synthesis Loop (Gemini 3.5 Flash)
@@ -156,28 +169,28 @@ def orchestrate_query(user_query: str) -> dict:
     
     # State matches SelfRAGState in self_rag.py
     initial_graph_state = {
-    "query": user_query,
-    "context": context_str,
-    "seen_chunks": [c.get("text", "") for c in chunks] if chunks else ([context_str] if context_str else []),
-    "tried_queries": [search_kw],
-    "draft": "",
-    "critique": None,
-    "loops": 0,
-    "final_output": "",
-    "status": "",
-}
+        "query": user_query,
+        "context": context_str,
+        "seen_chunks": [c.get("text", "") for c in chunks] if chunks else ([context_str] if context_str else []),
+        "tried_queries": [search_kw],
+        "draft": "",
+        "critique": None,
+        "loops": 0,
+        "final_output": "",
+        "status": "",
+    }
     run_id = uuid.uuid4()
 
-# Pass run_id inside config to LangGraph
+    # Pass run_id inside config to LangGraph
     config = {"run_id": run_id}
     graph_result = self_rag_app.invoke(initial_graph_state, config=config)
-
-    graph_result = self_rag_app.invoke(initial_graph_state)
 
     return {
         "query": user_query,
         "route": decision.route.value,
         "source": source_label,
+        "crag_status": crag_status,
+        "relevant_documents": relevant_docs,
         "evaluation_status": graph_result.get("status"),
         "retries_used": graph_result.get("loops", 0),  # mapped from new 'loops' key
         "response": graph_result.get("final_output"),
@@ -204,8 +217,13 @@ if __name__ == "__main__":
             print("\n------------------- FINAL RESULT -------------------")
             print(f"Route       : {res['route']}")
             print(f"Source      : {res['source']}")
+            print(f"CRAG Grade  : {res.get('crag_status', 'N/A')}")
             print(f"Graph Status: {res['evaluation_status']} (Retries: {res['retries_used']})")
             print(f"Response:\n{res['response']}")
+            if res.get("crag_status") == "correct" and res.get("relevant_documents"):
+                print("\n[Verified Source Documents (CRAG Passed)]")
+                for i, d in enumerate(res["relevant_documents"], 1):
+                    print(f"  {i}. {d.get('title')} ({d.get('ministry')}) | PRID: {d.get('prid')} | Date: {d.get('published_at', '')[:10]}")
             print("----------------------------------------------------\n")
     finally:
         retriever.close()

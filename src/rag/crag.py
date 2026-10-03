@@ -85,8 +85,67 @@ class CRAGEngine:
         candidate = match.group(1).strip() if match else raw_text
         return DocGradeDecision.model_validate_json(candidate)
 
+    def compact_context(
+        self,
+        query: str,
+        passages: list[str] | str,
+        max_tokens: int = 400,
+    ) -> str:
+        """
+        Compacts retrieved passages into a dense, non-redundant factual context
+        using the local small LLM (Qwen 2.5 1.5B) in a single inference call.
+        """
+        if isinstance(passages, list):
+            combined_text = "\n\n".join(p.strip() for p in passages if p and p.strip())
+        else:
+            combined_text = passages.strip() if passages else ""
+
+        if not combined_text:
+            return ""
+
+        prompt = (
+            f"<|im_start|>system\n"
+            f"You are a factual knowledge compaction engine for an Indian governance intelligence system.\n"
+            f"Your task is to compress and compact the provided reference excerpts into a dense, accurate factual summary directly relevant to the user query.\n"
+            f"Rules:\n"
+            f"1. Extract ONLY specific facts, figures, crop names, rates/prices, dates, percentages, organizations, and cabinet decisions that help answer the query.\n"
+            f"2. Completely remove bureaucratic greetings, administrative boilerplate, speaker titles, website navigation, and redundant statements.\n"
+            f"3. Strictly preserve exact numbers, proper nouns, and policy details. Do not extrapolate, infer, or hallucinate.\n"
+            f"4. Format the output as concise, high-density factual bullet points.<|im_end|>\n"
+            f"<|im_start|>user\n"
+            f"USER QUERY: {query}\n\n"
+            f"SOURCE EXCERPTS:\n{combined_text[:4000]}<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            output = self.model.generate(
+                **inputs,
+                max_new_tokens=max_tokens,
+                do_sample=False,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+
+        compacted = self.tokenizer.decode(
+            output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True
+        ).strip()
+
+        return compacted if compacted else combined_text[:1200]
+
     def filter_and_recompose(self, query: str, chunks: list[dict]) -> str:
-        """Decomposes chunks into atomic strips, evaluates each individually, and discards noise."""
+        """Extracts chunk texts and runs single-pass knowledge compaction."""
+        raw_texts = [
+            f"[{c.get('title', 'PIB Record')}]: {c.get('text', '')}"
+            for c in chunks
+            if c.get("text")
+        ]
+        if not raw_texts:
+            return ""
+        return self.compact_context(query, raw_texts)
+
+    def filter_and_recompose_strips(self, query: str, chunks: list[dict]) -> str:
+        """Legacy strip evaluator: Decomposes chunks into atomic strips, evaluates each individually, and discards noise."""
         all_strips = []
         for chunk in chunks:
             all_strips.extend(self.decompose(chunk.get("text", "")))

@@ -59,7 +59,7 @@ def render_langsmith_thinking_trace(run_id_str: str):
             
             # Direct link to LangSmith Studio
             st.markdown(
-                f"[🔗 Open Full Trace in LangSmith Studio](https://smith.langchain.com/projects/p/{project_name}/r/{run_id_str})"
+                f"[Open Full Trace in LangSmith Studio](https://smith.langchain.com/projects/p/{project_name}/r/{run_id_str})"
             )
 
             # Query child runs without conflicting root/execution_order filters
@@ -202,18 +202,21 @@ if submit_clicked and user_query.strip():
 
             # Diagnostic Metric Banners
             st.markdown("### **Execution Telemetry**")
-            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+            m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
             
             with m_col1:
                 st.metric("Triage Route", result.get("route", "N/A").upper())
             with m_col2:
+                crag_stat = result.get("crag_status", "N/A").replace("_", " ").title()
+                st.metric("CRAG Evaluation", crag_stat)
+            with m_col3:
                 source_formatted = result.get("source", "N/A").replace("_", " ").title()
                 st.metric("Context Origin", source_formatted)
-            with m_col3:
+            with m_col4:
                 raw_stat = result.get("evaluation_status", "N/A")
                 graph_stat = raw_stat.replace("_", " ").title()
                 st.metric("Critique Verification", graph_stat)
-            with m_col4:
+            with m_col5:
                 loops_used = result.get("retries_used", 0)
                 st.metric("Pipeline Latency", f"{elapsed_time:.2f}s", delta=f"{loops_used} Loops")
             st.divider()
@@ -221,6 +224,36 @@ if submit_clicked and user_query.strip():
             # Final Structured Output
             st.markdown("### **Intelligence Synthesis**")
             st.markdown(result.get("response", "No response returned."))
+
+            # Verified Source Documents (rendered ONLY if CRAG evaluated as CORRECT)
+            if result.get("crag_status") == "correct" and result.get("relevant_documents"):
+                st.divider()
+                st.markdown("### **Verified Source Documents (CRAG Passed)**")
+                st.caption("The CRAG evaluator verified that these official Press Information Bureau records contain direct, sufficient factual evidence:")
+                
+                for idx, doc in enumerate(result["relevant_documents"], 1):
+                    doc_title = doc.get("title") or f"PIB Record {idx}"
+                    doc_ministry = doc.get("ministry") or "Government of India"
+                    doc_prid = doc.get("prid") or "N/A"
+                    doc_published = doc.get("published_at", "")[:10] if doc.get("published_at") else "2026"
+                    doc_url = doc.get("url") or ""
+                    
+                    with st.expander(f"{idx}. {doc_title} ({doc_ministry})", expanded=(idx == 1)):
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.markdown(f"**Ministry:** {doc_ministry}")
+                        with col_b:
+                            st.markdown(f"**Date:** {doc_published}")
+                        with col_c:
+                            st.markdown(f"**PRID:** `{doc_prid}`")
+                        
+                        if doc_url:
+                            st.markdown(f"[Open Official Press Release ({doc_prid})]({doc_url})")
+                        
+                        snippet = doc.get("text", "").strip()
+                        if snippet:
+                            st.markdown("**Excerpt:**")
+                            st.info(snippet)
 
             # LangSmith Execution Trace Render
             if result.get("run_id"):

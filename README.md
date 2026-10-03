@@ -2,7 +2,7 @@
 
 An enterprise-grade, agentic governance intelligence engine built on official **Press Information Bureau (PIB) 2026** Government of India records. 
 
-This platform couples **Front-Door Query Routing**, **Hybrid Vector Retrieval** (Dense + BM25 Sparse with Reciprocal Rank Fusion), **Corrective RAG (CRAG)** for factual validation and strip decomposition, and a **Self-RAG LangGraph Synthesis Loop** (powered by Gemini) featuring multi-hop critique, hallucination detection, and real-time **LangSmith** thinking trace visualization.
+This platform couples **Front-Door Query Routing** (with dual Gemini 3.5 Flash-Lite / local Qwen 2.5 backends and deterministic guardrails), **Hybrid Vector Retrieval** (Dense + BM25 Sparse with Reciprocal Rank Fusion), **Corrective RAG (CRAG)** for factual validation, **Single-Pass Knowledge Compaction**, and a **Self-RAG LangGraph Synthesis Loop** (powered by Gemini) featuring multi-hop critique, hallucination detection, transparent verified document citations, and real-time **LangSmith** thinking trace visualization.
 
 ---
 
@@ -10,15 +10,18 @@ This platform couples **Front-Door Query Routing**, **Hybrid Vector Retrieval** 
 
 ```mermaid
 flowchart TD
-    Query(["User Query"]) --> Router{"Router (Qwen 2.5 1.5B)"}
+    Query(["User Query"]) --> PreGuard{"Pre-Guardrail (0ms)"}
+    PreGuard -->|Pure Code/Math| Direct["Direct Response (Parametric)"]
+    PreGuard -->|Governance/General| Router{"Router (Gemini 3.5 Flash-Lite / Qwen)"}
 
-    Router -->|Direct Task| Direct["Direct Response (Parametric)"]
+    Router -->|Code/Smalltalk| Direct
     Router -->|Governance RAG| Retriever["Hybrid Qdrant (Dense + BM25)"]
 
     Retriever --> CRAG{"CRAG Evaluator"}
-    CRAG -->|Verified Facts| Draft
+    CRAG -->|Verified (Correct)| Compactor["Compaction Engine (Qwen 2.5 1.5B)"]
     CRAG -->|Missing or Ambiguous| Exa["Exa Web Search Fallback"]
-    Exa --> Draft
+    Exa --> Compactor
+    Compactor --> Draft
 
     subgraph SelfRAG ["Self-RAG Loop (Gemini 3.5 Flash)"]
         Draft["Draft Answer"] --> Critique{"Critique Node"}
@@ -28,6 +31,8 @@ flowchart TD
 
     Direct --> UI(["Streamlit UI & LangSmith"])
     Final --> UI
+    CRAG -.->|When Correct| VerifiedDocs["Verified Source Documents (Bottom of UI)"]
+    VerifiedDocs -.-> UI
 ```
 
 ---
@@ -37,13 +42,13 @@ flowchart TD
 ### 1. Cloud APIs
 | API | Environment Variable | Purpose | How to Obtain |
 |---|---|---|---|
-| **Google Gemini API** | `GOOGLE_API_KEY` | Powers the Self-RAG Generation, Critique, and Synthesis loop (`gemini-3.5-flash`). | [Google AI Studio](https://aistudio.google.com/) |
+| **Google Gemini API** | `GOOGLE_API_KEY` | Powers the Self-RAG Generation, Critique, and Synthesis loop (`gemini-3.5-flash`), plus fast zero-shot query routing (`gemini-3.5-flash-lite` or `gemini-1.5-flash`). | [Google AI Studio](https://aistudio.google.com/) |
 | **Exa AI API** | `EXA_API_KEY` | Powers dynamic neural web search and live external fallback when local records lack specific data. | [Exa.ai Dashboard](https://dashboard.exa.ai/) |
 | **LangSmith** *(Optional)* | `LANGCHAIN_API_KEY` | Provides live execution tracing, token metrics, and thinking process visualization directly in the Streamlit UI. | [LangSmith](https://smith.langchain.com/) |
 
 ### 2. Local Models (Downloaded Automatically)
 No API keys required; weights are cached locally upon first run:
-- **`Qwen/Qwen2.5-1.5B-Instruct`**: Runs via HuggingFace `transformers` (CUDA `bfloat16` or CPU `float32`). Handles zero-latency front-door routing, direct task generation, and CRAG atomic document/strip grading.
+- **`Qwen/Qwen2.5-1.5B-Instruct`**: Runs via HuggingFace `transformers` (CUDA `bfloat16` or CPU `float32`). Powers single-pass knowledge compaction, CRAG evaluation, direct code generation, and optional local-only routing.
 - **`BAAI/bge-large-en-v1.5`**: 1024-dimensional dense semantic embedding model executed locally via `fastembed`.
 - **`Qdrant/bm25`**: Tokenized sparse embedding model executed locally via `fastembed` for exact keyword/lexical matching.
 
@@ -129,6 +134,12 @@ EXA_API_KEY="your-exa-api-key"
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_API_KEY="lsv2_pt_..."
 LANGCHAIN_PROJECT="pib-governance-intelligence"
+
+# Router Configuration (Optional)
+# Choose "gemini" (recommended) or "local" (100% free offline Qwen 2.5 1.5B)
+ROUTER_BACKEND="gemini"
+# Gemini model for routing (e.g. "gemini-3.5-flash-lite" or "gemini-1.5-flash")
+ROUTER_GEMINI_MODEL="gemini-3.5-flash-lite"
 ```
 
 ---
@@ -199,11 +210,16 @@ python src/ingestion/ingestion_partial.py
 
 ## Key Technical Highlights
 
-1. **Front-Door Deterministic Routing**: Eliminates expensive retrieval and LLM API calls for tasks that do not require governance records (e.g., coding, mathematics, general knowledge).
+1. **Front-Door Deterministic Routing & Guardrails**:
+   - Supports dual backends: ultra-fast **`gemini-3.5-flash-lite`** (or `gemini-1.5-flash`) for zero-shot accuracy, or **`Qwen/Qwen2.5-1.5B-Instruct`** for 100% free offline compute.
+   - **0ms Coding Pre-Guardrail**: Instantly routes coding/algorithmic prompts to direct generation without LLM overhead.
+   - **Governance & PSU Guardrail**: Prevents complex queries about PSUs (ONGC, BSNL, etc.), MoUs, and welfare schemes (Eklavya EMRS) from mistakenly bypassing the database.
+   - **Ministry Filter Sanitization**: Strips non-ministry company names from metadata filters so cross-ministerial records are never blocked.
 2. **Hybrid Reciprocal Rank Fusion (RRF)**: Combines dense contextual semantics (`bge-large-en-v1.5`) with sparse exact lexical matching (`bm25`) to accurately match technical scheme acronyms (e.g., PM-KISAN, PLI, 6G Alliance) alongside high-level policy intent.
-3. **Corrective RAG (CRAG) with Knowledge Strips**: Rather than passing raw 1000-character chunks directly to the generator, CRAG splits candidate documents into fine-grained 1-2 sentence strips, filters out bureaucratic boilerplate, and recomposes clean factual context.
-4. **Self-Correction & Hallucination Prevention**: The LangGraph loop forces Gemini to critique its own candidate draft against strict source grounding. If a retrieval gap is detected, the graph automatically formulates new search queries and searches local storage before escalating to live external web search.
-5. **Full Observability**: Live integration with LangSmith records every node traversal, input prompt, critique schema, and token count.
+3. **Corrective RAG (CRAG) with Knowledge Compaction**: Rather than passing raw 1000-character chunks or unfiltered web scrapes directly to the generator, an edge small LLM (`Qwen/Qwen2.5-1.5B-Instruct`) compacts local and web evidence into high-density factual briefs, discarding bureaucratic boilerplate and eliminating context bloat before passing to Gemini.
+4. **Verified Source Document Transparency**: When CRAG grades retrieved PIB records as `correct`, the original documents with release dates, PRID, clickable official links, and clean excerpts are rendered at the bottom of the Streamlit interface.
+5. **Self-Correction & Hallucination Prevention**: The LangGraph loop forces Gemini to critique its own candidate draft against strict source grounding. If a retrieval gap is detected, the graph automatically formulates new search queries and searches local storage before escalating to live external web search.
+6. **Full Observability**: Live integration with LangSmith records every node traversal, input prompt, critique schema, and token count.
 
 ---
 
