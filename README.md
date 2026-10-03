@@ -9,29 +9,32 @@ This platform couples **Front-Door Query Routing** (with dual Gemini 3.5 Flash-L
 ## Architecture Overview
 
 ```mermaid
-flowchart TD
+flowchart LR
     Query(["User Query"]) --> PreGuard{"Pre-Guardrail"}
-    PreGuard -->|Pure Code or Math| Direct["Direct Response (Parametric)"]
-    PreGuard -->|Governance or Policy| Router{"Router (Gemini 3.5 Flash-Lite / Qwen)"}
-
-    Router -->|Code or Smalltalk| Direct
-    Router -->|Governance RAG| Retriever["Hybrid Qdrant (Dense + BM25)"]
-
+    
+    PreGuard -->|Code or Math| Direct["Direct Response<br/>(Parametric)"]
+    PreGuard -->|Governance| Router{"Router<br/>(Flash-Lite / Qwen)"}
+    
+    Router -->|Code or Chat| Direct
+    Router -->|Governance RAG| Retriever[("Hybrid Qdrant<br/>Dense + BM25")]
+    
     Retriever --> CRAG{"CRAG Evaluator"}
-    CRAG -->|Verified Correct| Compactor["Compaction Engine (Qwen 2.5 1.5B)"]
-    CRAG -->|Missing or Ambiguous| Exa["Exa Web Search Fallback"]
+    CRAG -->|Verified| Compactor["Compaction Engine<br/>(Qwen 2.5 1.5B)"]
+    CRAG -->|Fallback| Exa["Exa Web Fallback"]
     Exa --> Compactor
-    Compactor --> Draft
-
+    
     subgraph SelfRAG ["Self-RAG Loop (Gemini 3.5 Flash)"]
+        direction TB
         Draft["Draft Answer"] --> Critique{"Critique Node"}
-        Critique -->|Grounded and Complete| Final["Verified Response"]
-        Critique -->|Gap or Hallucination| Draft
+        Critique -->|Gap or Retry| Draft
     end
-
-    Direct --> UI(["Streamlit UI & LangSmith"])
+    
+    Compactor --> Draft
+    Critique -->|Grounded and Complete| Final["Verified Response"]
+    
+    Direct --> UI(["Streamlit UI & Telemetry"])
     Final --> UI
-    CRAG -.->|When Correct| VerifiedDocs["Verified Source Documents (Bottom of UI)"]
+    CRAG -.->|When Correct| VerifiedDocs["Verified Source Docs<br/>(Bottom of UI)"]
     VerifiedDocs -.-> UI
 ```
 

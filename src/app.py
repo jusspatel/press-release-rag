@@ -137,15 +137,27 @@ with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/5/55/Emblem_of_India.svg", width=65)
     st.markdown("### **System Architecture**")
     st.markdown("""
-    - **Front-Door Router:** Local Qwen 2.5 1.5B (CUDA)
-    - **Primary Store:** Qdrant Hybrid RRF (`bge-large` + BM25)
-    - **Dynamic Fallback:** Exa Neural Search
-    - **Synthesis Engine:** Gemini 3.5 Flash (LangGraph Self-RAG)
+    - **Front-Door Router:**
+      - *Primary:* Gemini 3.5 Flash-Lite (Fast, zero-shot structured output)
+      - *Offline Fallback:* Local Qwen 2.5 1.5B (CUDA/CPU)
+      - *Pre-Guardrail:* 0ms deterministic code/math triage
+    - **Primary Store:**
+      - Qdrant Hybrid RRF (`BAAI/bge-large-en-v1.5` dense + `bm25` sparse)
+    - **Evaluation & Compaction:**
+      - CRAG Evaluator: Local Qwen 2.5 1.5B
+      - Knowledge Compactor: Local Qwen 2.5 1.5B (Single-pass factual density)
+    - **Dynamic Fallback:**
+      - Exa Neural Web Search (External governance & historical archives)
+    - **Synthesis & Reflection:**
+      - Gemini 3.5 Flash (LangGraph Self-RAG multi-hop critique loop)
+    - **Observability:**
+      - LangSmith Real-Time Tracing & Telemetry
     """)
     st.divider()
 
     st.markdown("### **Preset Sample Queries**")
     sample_queries = [
+        "Did ONGC sign an MoU in 2026 for Eklavya Model Residential Schools?",
         "What is the strategic agenda and MoU between India and European Union regarding 6G technology?",
         "When was the original Digital India program first launched in 2015?",
         "Write a quick python function to implement quicksort.",
