@@ -9,33 +9,40 @@ This platform couples **Front-Door Query Routing** (with dual Gemini 3.5 Flash-L
 ## Architecture Overview
 
 ```mermaid
-flowchart LR
-    Query(["User Query"]) --> PreGuard{"Pre-Guardrail"}
-    
-    PreGuard -->|Code or Math| Direct["Direct Response<br/>(Parametric)"]
-    PreGuard -->|Governance| Router{"Router<br/>(Flash-Lite / Qwen)"}
-    
-    Router -->|Code or Chat| Direct
-    Router -->|Governance RAG| Retriever[("Hybrid Qdrant<br/>Dense + BM25")]
-    
-    Retriever --> CRAG{"CRAG Evaluator"}
-    CRAG -->|Verified| Compactor["Compaction Engine<br/>(Qwen 2.5 1.5B)"]
-    CRAG -->|Fallback| Exa["Exa Web Fallback"]
-    Exa --> Compactor
-    
-    subgraph SelfRAG ["Self-RAG Loop (Gemini 3.5 Flash)"]
-        direction TB
-        Draft["Draft Answer"] --> Critique{"Critique Node"}
-        Critique -->|Gap or Retry| Draft
+flowchart TD
+    subgraph S1 ["Stage 1: Front-Door Triage"]
+        direction LR
+        Query(["User Query"]) --> PreGuard{"Pre-Guardrail"}
+        PreGuard -->|Code or Math| Direct["Direct Response<br/>(Parametric)"]
+        PreGuard -->|Governance| Router{"Router<br/>(Flash-Lite / Qwen)"}
+        Router -->|Code/Chat| Direct
     end
-    
+
+    subgraph S2 ["Stage 2: Retrieval, CRAG & Compaction"]
+        direction LR
+        Retriever[("Hybrid Qdrant<br/>Dense + BM25")] --> CRAG{"CRAG Evaluator"}
+        CRAG -->|Verified| Compactor["Compactor Engine<br/>(Qwen 2.5 1.5B)"]
+        CRAG -->|Fallback| Exa["Exa Web Fallback"]
+        Exa --> Compactor
+    end
+
+    subgraph S3 ["Stage 3: Self-RAG Synthesis & Reflection"]
+        direction LR
+        Draft["Draft Answer"] --> Critique{"Critique Node<br/>(Gemini 3.5 Flash)"}
+        Critique -->|Gap / Retry| Draft
+        Critique -->|Grounded| Final["Verified Response"]
+    end
+
+    subgraph S4 ["Stage 4: User Delivery & Transparency"]
+        direction LR
+        Direct --> UI(["Streamlit UI & Telemetry"])
+        Final --> UI
+        CRAG -.->|When Correct| Docs["Verified Source Documents<br/>(Citations & PIB Links)"]
+        Docs -.-> UI
+    end
+
+    Router -->|Governance RAG| Retriever
     Compactor --> Draft
-    Critique -->|Grounded and Complete| Final["Verified Response"]
-    
-    Direct --> UI(["Streamlit UI & Telemetry"])
-    Final --> UI
-    CRAG -.->|When Correct| VerifiedDocs["Verified Source Docs<br/>(Bottom of UI)"]
-    VerifiedDocs -.-> UI
 ```
 
 ---
