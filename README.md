@@ -10,22 +10,22 @@ This platform couples **Front-Door Query Routing** (with dual Gemini 3.5 Flash-L
 
 ```mermaid
 flowchart TD
-    Query(["User Query"]) --> PreGuard{"Pre-Guardrail (0ms)"}
-    PreGuard -->|Pure Code/Math| Direct["Direct Response (Parametric)"]
-    PreGuard -->|Governance/General| Router{"Router (Gemini 3.5 Flash-Lite / Qwen)"}
+    Query(["User Query"]) --> PreGuard{"Pre-Guardrail"}
+    PreGuard -->|Pure Code or Math| Direct["Direct Response (Parametric)"]
+    PreGuard -->|Governance or Policy| Router{"Router (Gemini 3.5 Flash-Lite / Qwen)"}
 
-    Router -->|Code/Smalltalk| Direct
+    Router -->|Code or Smalltalk| Direct
     Router -->|Governance RAG| Retriever["Hybrid Qdrant (Dense + BM25)"]
 
     Retriever --> CRAG{"CRAG Evaluator"}
-    CRAG -->|Verified (Correct)| Compactor["Compaction Engine (Qwen 2.5 1.5B)"]
+    CRAG -->|Verified Correct| Compactor["Compaction Engine (Qwen 2.5 1.5B)"]
     CRAG -->|Missing or Ambiguous| Exa["Exa Web Search Fallback"]
     Exa --> Compactor
     Compactor --> Draft
 
     subgraph SelfRAG ["Self-RAG Loop (Gemini 3.5 Flash)"]
         Draft["Draft Answer"] --> Critique{"Critique Node"}
-        Critique -->|Grounded & Complete| Final["Verified Response"]
+        Critique -->|Grounded and Complete| Final["Verified Response"]
         Critique -->|Gap or Hallucination| Draft
     end
 
