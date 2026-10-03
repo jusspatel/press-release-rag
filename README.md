@@ -1,8 +1,8 @@
 # Press Release RAG
 
-An enterprise-grade, agentic governance intelligence engine built on official **Press Information Bureau (PIB) 2026** Government of India records. 
+A retrieval-augmented generation (RAG) system for official **Press Information Bureau (PIB) 2026** Government of India records.
 
-This platform couples **Front-Door Query Routing** (with dual Gemini 3.5 Flash-Lite / local Qwen 2.5 backends and deterministic guardrails), **Hybrid Vector Retrieval** (Dense + BM25 Sparse with Reciprocal Rank Fusion), **Corrective RAG (CRAG)** for factual validation, **Single-Pass Knowledge Compaction**, and a **Self-RAG LangGraph Synthesis Loop** (powered by Gemini) featuring multi-hop critique, hallucination detection, transparent verified document citations, and real-time **LangSmith** thinking trace visualization.
+The pipeline routes incoming questions, searches press releases using hybrid vector + keyword retrieval, cleans and compacts retrieved context to remove bureaucratic boilerplate, and generates grounded answers with verifiable source links.
 
 ---
 
@@ -218,18 +218,29 @@ python src/ingestion/ingestion_partial.py
 
 ---
 
-## Key Technical Highlights
+## Key Features
 
-1. **Front-Door Deterministic Routing & Guardrails**:
-   - Supports dual backends: ultra-fast **`gemini-3.5-flash-lite`** (or `gemini-1.5-flash`) for zero-shot accuracy, or **`Qwen/Qwen2.5-1.5B-Instruct`** for 100% free offline compute.
-   - **0ms Coding Pre-Guardrail**: Instantly routes coding/algorithmic prompts to direct generation without LLM overhead.
-   - **Governance & PSU Guardrail**: Prevents complex queries about PSUs (ONGC, BSNL, etc.), MoUs, and welfare schemes (Eklavya EMRS) from mistakenly bypassing the database.
-   - **Ministry Filter Sanitization**: Strips non-ministry company names from metadata filters so cross-ministerial records are never blocked.
-2. **Hybrid Reciprocal Rank Fusion (RRF)**: Combines dense contextual semantics (`bge-large-en-v1.5`) with sparse exact lexical matching (`bm25`) to accurately match technical scheme acronyms (e.g., PM-KISAN, PLI, 6G Alliance) alongside high-level policy intent.
-3. **Corrective RAG (CRAG) with Knowledge Compaction**: Rather than passing raw 1000-character chunks or unfiltered web scrapes directly to the generator, an edge small LLM (`Qwen/Qwen2.5-1.5B-Instruct`) compacts local and web evidence into high-density factual briefs, discarding bureaucratic boilerplate and eliminating context bloat before passing to Gemini.
-4. **Verified Source Document Transparency**: When CRAG grades retrieved PIB records as `correct`, the original documents with release dates, PRID, clickable official links, and clean excerpts are rendered at the bottom of the Streamlit interface.
-5. **Self-Correction & Hallucination Prevention**: The LangGraph loop forces Gemini to critique its own candidate draft against strict source grounding. If a retrieval gap is detected, the graph automatically formulates new search queries and searches local storage before escalating to live external web search.
-6. **Full Observability**: Live integration with LangSmith records every node traversal, input prompt, critique schema, and token count.
+1. **Smart Query Routing**:
+   - Directs coding and math questions to fast parametric answers, while routing policy and governance questions to vector search.
+   - Runs on Gemini 3.5 Flash-Lite (fast, low-cost) or a local Qwen 1.5B model offline.
+   - Includes simple guardrails so queries about companies, MoUs, and government schemes aren't accidentally skipped.
+
+2. **Hybrid Search (Dense + Keyword)**:
+   - Combines semantic vector search (`bge-large-en-v1.5`) with exact keyword matching (`bm25`) using Reciprocal Rank Fusion.
+   - Accurately matches both general topics and specific scheme acronyms (e.g., PM-KISAN, Eklavya Schools, Bharat 6G).
+
+3. **Knowledge Compaction (CRAG)**:
+   - Instead of sending messy raw paragraphs full of administrative headers and ceremonial text to the final LLM, a small local model extracts only the relevant facts, figures, and dates into a concise summary.
+
+4. **Iterative Verification (Self-RAG)**:
+   - The system checks its own answer draft against the source context to prevent hallucinations.
+   - If key information is missing, it triggers targeted follow-up searches (local database first, followed by live web search fallback) to fill the gaps.
+
+5. **Direct Source Citations**:
+   - When verified press releases answer the query, direct links, release dates, PRIDs, and excerpts are displayed at the bottom of the answer.
+
+6. **Observability**:
+   - Traces pipeline steps, critique decisions, and token usage via LangSmith.
 
 ---
 
